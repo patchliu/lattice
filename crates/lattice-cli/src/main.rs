@@ -27,9 +27,6 @@ enum Commands {
         /// Path to a local GGUF or Safetensors model file.
         #[arg(long)]
         model: PathBuf,
-        /// Prompt used for the placeholder first-token path.
-        #[arg(long)]
-        prompt: String,
         /// Optional path to a shared object that exports optimized kernels.
         #[arg(long)]
         kernels: Option<PathBuf>,
@@ -42,11 +39,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Commands::Doctor => doctor(),
-        Commands::Run {
-            model,
-            prompt,
-            kernels,
-        } => run(model, prompt, kernels)?,
+        Commands::Run { model, kernels } => run(model, kernels)?,
     }
 
     Ok(())
@@ -61,24 +54,22 @@ fn init_tracing() {
 
 fn doctor() {
     println!("lattice workspace initialized");
-    println!(
-        "next step: cargo run -p lattice-cli -- run --model /path/to/model.gguf --prompt \"hello\""
-    );
+    println!("next step: cargo run -p lattice-cli -- run --model /path/to/model.gguf");
 }
 
-fn run(model: PathBuf, prompt: String, kernels: Option<PathBuf>) -> Result<()> {
+fn run(model: PathBuf, kernels: Option<PathBuf>) -> Result<()> {
     let mut builder = InferenceRuntime::builder().with_model_path(model);
     if let Some(kernels) = kernels {
         builder = builder.with_kernel_library(kernels);
     }
 
     let runtime = builder.build()?;
-    let token = runtime.generate_first_token(&prompt)?;
+    let status = runtime.bootstrap_status();
 
     println!("format: {:?}", runtime.model_format());
     println!("mapped-bytes: {}", runtime.model_bytes());
     println!("external-kernels: {}", runtime.has_external_kernels());
-    println!("first-token: {token}");
+    println!("status: {status}");
 
     Ok(())
 }

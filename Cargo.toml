@@ -1,3 +1,12 @@
+[package]
+name = "lattice"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Facade crate and examples for the Lattice workspace."
+
 [workspace]
 members = [
     "crates/lattice-allocator",
@@ -21,12 +30,26 @@ license = "TBD"
 anyhow = "1.0.100"
 bytemuck = { version = "1.24.0", features = ["derive"] }
 clap = { version = "4.5.39", features = ["derive"] }
+hf-hub = "0.5.0"
 libloading = "0.8.9"
 memmap2 = "0.9.5"
+serde = { version = "1.0.228", features = ["derive"] }
 thiserror = "2.0.17"
 tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+toml = "0.9.8"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+hf-hub.workspace = true
+lattice-runtime = { path = "crates/lattice-runtime" }
+serde.workspace = true
+tokio.workspace = true
+toml.workspace = true
 
 [workspace.lints.rust]
 missing_docs = "warn"

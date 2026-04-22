@@ -62,21 +62,16 @@ impl InferenceRuntime {
         self.kernel_launcher.is_loaded()
     }
 
-    /// Runs a placeholder first-token path for the bootstrap milestone.
-    pub fn generate_first_token(&self, prompt: &str) -> Result<String> {
-        let prompt = prompt.trim();
-        if prompt.is_empty() {
-            return Err(LatticeError::Message(
-                "prompt must not be empty".to_string(),
-            ));
-        }
-
-        debug!(
-            prompt_len = prompt.len(),
-            "running placeholder first-token path"
-        );
-        let seed = prompt.split_whitespace().next().unwrap_or("token");
-        Ok(format!("{seed}_token"))
+    /// Returns a bootstrap status string for the currently initialized runtime.
+    ///
+    /// This reports runtime readiness only. It does not execute model inference.
+    pub fn bootstrap_status(&self) -> String {
+        debug!("reporting bootstrap runtime status");
+        format!(
+            "runtime ready: mapped {} byte(s) as {:?}",
+            self.model_bytes(),
+            self.model_format()
+        )
     }
 }
 

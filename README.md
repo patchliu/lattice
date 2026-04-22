@@ -26,7 +26,7 @@ The project goal is to build a production-grade foundation for local and multi-n
 
 ## Current Status
 
-The repository already provides the bootstrap workspace, crate layout, CLI entrypoints, local `GGUF` and `Safetensors` format detection, memory-mapped weight loading, and a placeholder first-token path for validating the runtime skeleton.
+The repository already provides the bootstrap workspace, crate layout, CLI entrypoints, local `GGUF` and `Safetensors` format detection, memory-mapped weight loading, and a placeholder bootstrap validation path for exercising the runtime skeleton.
 
 This is enough to exercise the core integration surface end to end: open a local model file, initialize the runtime, optionally load an external kernel library, and verify the command flow from the CLI into the runtime boundary.
 
@@ -59,7 +59,7 @@ cargo run -p lattice-cli -- doctor
 To exercise the current runtime path with a local model file:
 
 ```bash
-cargo run -p lattice-cli -- run --model /path/to/model.gguf --prompt "hello lattice"
+cargo run -p lattice-cli -- run --model /path/to/model.gguf
 ```
 
 If you have an external kernel library to load during startup:
@@ -67,8 +67,13 @@ If you have an external kernel library to load during startup:
 ```bash
 cargo run -p lattice-cli -- run \
   --model /path/to/model.gguf \
-  --prompt "hello lattice" \
   --kernels /path/to/libkernels.so
+```
+
+To exercise the model download + cache + mmap bootstrap flow:
+
+```bash
+cargo run --example load_model
 ```
 
 ## Documentation
