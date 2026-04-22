@@ -1,0 +1,23 @@
+[package]
+name = "lattice-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "CLI entrypoint for the Lattice workspace."
+default-run = "lattice"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+lattice-runtime = { path = "../lattice-runtime" }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[[bin]]
+name = "lattice"
+path = "src/main.rs"

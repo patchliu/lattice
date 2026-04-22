@@ -1,0 +1,14 @@
+[package]
+name = "lattice-tensor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Tensor types and layouts for Lattice."
+
+[lints]
+workspace = true
+
+[dependencies]
+lattice-allocator = { path = "../lattice-allocator" }

@@ -1,0 +1,15 @@
+[package]
+name = "lattice-model"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Weight loading and model source management for Lattice."
+
+[lints]
+workspace = true
+
+[dependencies]
+lattice-core = { path = "../lattice-core" }
+memmap2.workspace = true

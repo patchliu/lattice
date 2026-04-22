@@ -1,0 +1,13 @@
+[package]
+name = "lattice-allocator"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Aligned CPU allocation primitives for Lattice."
+
+[lints]
+workspace = true
+
+[dependencies]
