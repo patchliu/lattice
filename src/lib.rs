@@ -16,4 +16,9 @@ pub mod model {
     pub mod gguf {
         pub use lattice_model::gguf::*;
     }
+
+    /// LLaMA-family model binding helpers.
+    pub mod llama {
+        pub use lattice_model::llama::*;
+    }
 }

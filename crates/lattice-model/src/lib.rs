@@ -1,6 +1,7 @@
 //! Model source handling and zero-copy weight mapping.
 
 pub mod gguf;
+pub mod llama;
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -11,6 +12,7 @@ pub use gguf::{
     parse_gguf, parse_gguf_metadata,
 };
 use lattice_core::{LatticeError, Result};
+pub use llama::{LlamaBlockTensors, LlamaModel, LlamaModelSpec, LlamaTensorMap};
 use memmap2::{Mmap, MmapOptions};
 
 /// Supported weight file formats.
