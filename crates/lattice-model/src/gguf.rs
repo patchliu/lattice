@@ -1,6 +1,8 @@
 //! GGUF metadata parsing primitives.
+#![allow(non_camel_case_types)]
 
 use std::collections::BTreeMap;
+use std::ops::Range;
 
 use lattice_core::{LatticeError, Result};
 
@@ -208,9 +210,28 @@ impl GgufTensorInfo {
         self.ggml_type
     }
 
+    /// Returns the parsed GGML tensor type if this type is currently supported.
+    pub fn parsed_ggml_type(&self) -> Result<GgmlType> {
+        GgmlType::from_raw(self.ggml_type)
+    }
+
     /// Returns the tensor data offset relative to the GGUF tensor data section.
     pub const fn offset(&self) -> u64 {
         self.offset
+    }
+
+    /// Returns the total number of logical tensor elements.
+    pub fn element_count(&self) -> Result<u64> {
+        self.dimensions.iter().try_fold(1_u64, |acc, dimension| {
+            acc.checked_mul(*dimension).ok_or_else(|| {
+                LatticeError::Message(format!("tensor `{}` element count overflowed", self.name))
+            })
+        })
+    }
+
+    /// Returns the encoded tensor byte length based on the GGML type and shape.
+    pub fn byte_len(&self) -> Result<usize> {
+        self.parsed_ggml_type()?.tensor_byte_len(&self.dimensions)
     }
 
     /// Returns the absolute byte offset from the start of the file.
@@ -228,12 +249,185 @@ impl GgufTensorInfo {
     }
 }
 
+/// A GGML tensor encoding supported by the GGUF parser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum GgmlType {
+    /// 32-bit float.
+    F32,
+    /// 16-bit float.
+    F16,
+    /// Q4_0 quantization.
+    Q4_0,
+    /// Q4_1 quantization.
+    Q4_1,
+    /// Q5_0 quantization.
+    Q5_0,
+    /// Q5_1 quantization.
+    Q5_1,
+    /// Q8_0 quantization.
+    Q8_0,
+    /// Q8_1 quantization.
+    Q8_1,
+    /// Q2_K quantization.
+    Q2_K,
+    /// Q3_K quantization.
+    Q3_K,
+    /// Q4_K quantization.
+    Q4_K,
+    /// Q5_K quantization.
+    Q5_K,
+    /// Q6_K quantization.
+    Q6_K,
+}
+
+impl GgmlType {
+    /// Parses a GGML type id from GGUF tensor metadata.
+    pub fn from_raw(raw: u32) -> Result<Self> {
+        let value = match raw {
+            0 => Self::F32,
+            1 => Self::F16,
+            2 => Self::Q4_0,
+            3 => Self::Q4_1,
+            6 => Self::Q5_0,
+            7 => Self::Q5_1,
+            8 => Self::Q8_0,
+            9 => Self::Q8_1,
+            10 => Self::Q2_K,
+            11 => Self::Q3_K,
+            12 => Self::Q4_K,
+            13 => Self::Q5_K,
+            14 => Self::Q6_K,
+            _ => {
+                return Err(LatticeError::Message(format!(
+                    "unsupported GGML tensor type id: {raw}"
+                )));
+            }
+        };
+
+        Ok(value)
+    }
+
+    /// Returns the raw GGML type id used in the GGUF file.
+    pub const fn raw(self) -> u32 {
+        match self {
+            Self::F32 => 0,
+            Self::F16 => 1,
+            Self::Q4_0 => 2,
+            Self::Q4_1 => 3,
+            Self::Q5_0 => 6,
+            Self::Q5_1 => 7,
+            Self::Q8_0 => 8,
+            Self::Q8_1 => 9,
+            Self::Q2_K => 10,
+            Self::Q3_K => 11,
+            Self::Q4_K => 12,
+            Self::Q5_K => 13,
+            Self::Q6_K => 14,
+        }
+    }
+
+    /// Returns the GGML storage layout for the tensor type.
+    pub const fn layout(self) -> GgmlTypeLayout {
+        match self {
+            Self::F32 => GgmlTypeLayout::new(1, 4),
+            Self::F16 => GgmlTypeLayout::new(1, 2),
+            Self::Q4_0 => GgmlTypeLayout::new(32, 18),
+            Self::Q4_1 => GgmlTypeLayout::new(32, 20),
+            Self::Q5_0 => GgmlTypeLayout::new(32, 22),
+            Self::Q5_1 => GgmlTypeLayout::new(32, 24),
+            Self::Q8_0 => GgmlTypeLayout::new(32, 34),
+            Self::Q8_1 => GgmlTypeLayout::new(32, 36),
+            Self::Q2_K => GgmlTypeLayout::new(256, 84),
+            Self::Q3_K => GgmlTypeLayout::new(256, 110),
+            Self::Q4_K => GgmlTypeLayout::new(256, 144),
+            Self::Q5_K => GgmlTypeLayout::new(256, 176),
+            Self::Q6_K => GgmlTypeLayout::new(256, 210),
+        }
+    }
+
+    /// Returns whether the type is quantized.
+    pub const fn is_quantized(self) -> bool {
+        self.layout().block_size > 1
+    }
+
+    /// Computes the encoded byte length for a tensor with the provided shape.
+    pub fn tensor_byte_len(self, dimensions: &[u64]) -> Result<usize> {
+        let layout = self.layout();
+        let row_elements = dimensions.first().copied().unwrap_or(1);
+        let row_elements = usize::try_from(row_elements).map_err(|_| {
+            LatticeError::Message("GGUF tensor row width does not fit into usize".to_string())
+        })?;
+        if row_elements == 0 {
+            return Ok(0);
+        }
+        if row_elements % layout.block_size != 0 {
+            return Err(LatticeError::Message(format!(
+                "tensor row width {row_elements} is not divisible by block size {} for {:?}",
+                layout.block_size, self
+            )));
+        }
+
+        let row_bytes = row_elements
+            .checked_div(layout.block_size)
+            .and_then(|blocks| blocks.checked_mul(layout.bytes_per_block))
+            .ok_or_else(|| {
+                LatticeError::Message("GGUF tensor row byte length overflowed".to_string())
+            })?;
+
+        let row_count = dimensions
+            .iter()
+            .skip(1)
+            .try_fold(1_usize, |acc, dimension| {
+                let dimension = usize::try_from(*dimension).map_err(|_| {
+                    LatticeError::Message(
+                        "GGUF tensor dimension does not fit into usize".to_string(),
+                    )
+                })?;
+                acc.checked_mul(dimension).ok_or_else(|| {
+                    LatticeError::Message("GGUF tensor row count overflowed".to_string())
+                })
+            })?;
+
+        row_bytes
+            .checked_mul(row_count)
+            .ok_or_else(|| LatticeError::Message("GGUF tensor byte length overflowed".to_string()))
+    }
+}
+
+/// The encoded storage layout of a GGML tensor type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GgmlTypeLayout {
+    block_size: usize,
+    bytes_per_block: usize,
+}
+
+impl GgmlTypeLayout {
+    const fn new(block_size: usize, bytes_per_block: usize) -> Self {
+        Self {
+            block_size,
+            bytes_per_block,
+        }
+    }
+
+    /// Returns the number of logical values encoded in one storage block.
+    pub const fn block_size(&self) -> usize {
+        self.block_size
+    }
+
+    /// Returns the encoded byte width of one storage block.
+    pub const fn bytes_per_block(&self) -> usize {
+        self.bytes_per_block
+    }
+}
+
 /// A parsed GGUF file view containing generic metadata and tensor directory entries.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GgufMetadata {
     header: GgufHeader,
     metadata: BTreeMap<String, GgufMetadataValue>,
     tensor_infos: Vec<GgufTensorInfo>,
+    tensor_indices: BTreeMap<String, usize>,
     tensor_data_offset: usize,
 }
 
@@ -258,12 +452,18 @@ impl GgufMetadata {
         let mut metadata = BTreeMap::new();
         for _ in 0..header.metadata_kv_count {
             let key = reader.read_string()?;
+            if metadata.contains_key(&key) {
+                return Err(LatticeError::Message(format!(
+                    "duplicate GGUF metadata key `{key}`"
+                )));
+            }
             let value_type = GgufMetadataValueType::from_raw(reader.read_u32()?)?;
             let value = reader.read_value(value_type)?;
             metadata.insert(key, value);
         }
 
         let mut tensor_infos = Vec::with_capacity(header.tensor_count as usize);
+        let mut tensor_indices = BTreeMap::new();
         for _ in 0..header.tensor_count {
             let name = reader.read_string()?;
             let dimension_count = usize::try_from(reader.read_u32()?).map_err(|_| {
@@ -276,12 +476,20 @@ impl GgufMetadata {
                 dimensions.push(reader.read_u64()?);
             }
 
+            if tensor_indices.contains_key(&name) {
+                return Err(LatticeError::Message(format!(
+                    "duplicate GGUF tensor name `{name}`"
+                )));
+            }
+
             tensor_infos.push(GgufTensorInfo {
                 name,
                 dimensions,
                 ggml_type: reader.read_u32()?,
                 offset: reader.read_u64()?,
             });
+            let index = tensor_infos.len() - 1;
+            tensor_indices.insert(tensor_infos[index].name.clone(), index);
         }
 
         let tensor_data_offset = align_offset(reader.offset(), metadata_alignment(&metadata)?)?;
@@ -289,6 +497,7 @@ impl GgufMetadata {
             header,
             metadata,
             tensor_infos,
+            tensor_indices,
             tensor_data_offset,
         })
     }
@@ -332,9 +541,139 @@ impl GgufMetadata {
         self.tensor_infos.as_slice()
     }
 
+    /// Returns a tensor descriptor by name.
+    pub fn tensor_info(&self, name: &str) -> Option<&GgufTensorInfo> {
+        self.tensor_indices
+            .get(name)
+            .and_then(|index| self.tensor_infos.get(*index))
+    }
+
     /// Returns the absolute file offset of the tensor data section.
     pub const fn tensor_data_offset(&self) -> usize {
         self.tensor_data_offset
+    }
+}
+
+/// A parsed GGUF file that can expose zero-copy tensor views.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GgufFile<'a> {
+    metadata: GgufMetadata,
+    bytes: &'a [u8],
+}
+
+impl<'a> GgufFile<'a> {
+    /// Parses a GGUF file from raw bytes.
+    pub fn parse(bytes: &'a [u8]) -> Result<Self> {
+        Ok(Self {
+            metadata: GgufMetadata::parse(bytes)?,
+            bytes,
+        })
+    }
+
+    /// Returns the parsed metadata.
+    pub fn metadata(&self) -> &GgufMetadata {
+        &self.metadata
+    }
+
+    /// Returns a zero-copy view over a named tensor if present.
+    pub fn tensor(&'a self, name: &str) -> Result<Option<GgufTensorView<'a>>> {
+        let Some(info) = self.metadata.tensor_info(name) else {
+            return Ok(None);
+        };
+
+        Ok(Some(self.tensor_view(info)?))
+    }
+
+    fn tensor_view(&'a self, info: &'a GgufTensorInfo) -> Result<GgufTensorView<'a>> {
+        let alignment = self.metadata.alignment()?;
+        let offset = usize::try_from(info.offset).map_err(|_| {
+            LatticeError::Message(format!(
+                "tensor `{}` offset does not fit into usize",
+                info.name()
+            ))
+        })?;
+        if offset % alignment != 0 {
+            return Err(LatticeError::Message(format!(
+                "tensor `{}` offset {} is not aligned to {}",
+                info.name(),
+                offset,
+                alignment
+            )));
+        }
+
+        let byte_len = info.byte_len()?;
+        let start = info.file_offset(self.metadata.tensor_data_offset())?;
+        let end = start.checked_add(byte_len).ok_or_else(|| {
+            LatticeError::Message(format!(
+                "tensor `{}` range overflowed while building view",
+                info.name()
+            ))
+        })?;
+        let data = self.bytes.get(start..end).ok_or_else(|| {
+            LatticeError::Message(format!(
+                "tensor `{}` range {}..{} exceeds GGUF file size {}",
+                info.name(),
+                start,
+                end,
+                self.bytes.len()
+            ))
+        })?;
+
+        Ok(GgufTensorView {
+            info,
+            data,
+            file_range: start..end,
+        })
+    }
+}
+
+/// A zero-copy view over an encoded GGUF tensor payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GgufTensorView<'a> {
+    info: &'a GgufTensorInfo,
+    data: &'a [u8],
+    file_range: Range<usize>,
+}
+
+impl<'a> GgufTensorView<'a> {
+    /// Returns the tensor descriptor.
+    pub fn info(&self) -> &GgufTensorInfo {
+        self.info
+    }
+
+    /// Returns the tensor name.
+    pub fn name(&self) -> &str {
+        self.info.name()
+    }
+
+    /// Returns the logical tensor dimensions.
+    pub fn dimensions(&self) -> &[u64] {
+        self.info.dimensions()
+    }
+
+    /// Returns the raw GGML type id.
+    pub const fn ggml_type_raw(&self) -> u32 {
+        self.info.ggml_type()
+    }
+
+    /// Returns the parsed GGML type.
+    pub fn ggml_type(&self) -> Result<GgmlType> {
+        self.info.parsed_ggml_type()
+    }
+
+    /// Returns the encoded tensor bytes.
+    pub fn data(&self) -> &'a [u8] {
+        self.data
+    }
+
+    /// Returns the tensor byte range in the underlying file.
+    pub fn file_range(&self) -> Range<usize> {
+        self.file_range.clone()
+    }
+
+    /// Returns the encoded tensor byte length.
+    pub fn byte_len(&self) -> usize {
+        self.data.len()
     }
 }
 
@@ -399,6 +738,11 @@ impl LlamaMetadata {
 /// Parses GGUF metadata from a byte slice.
 pub fn parse_gguf_metadata(bytes: &[u8]) -> Result<GgufMetadata> {
     GgufMetadata::parse(bytes)
+}
+
+/// Parses a GGUF file and enables zero-copy tensor lookup.
+pub fn parse_gguf(bytes: &[u8]) -> Result<GgufFile<'_>> {
+    GgufFile::parse(bytes)
 }
 
 fn metadata_u64(metadata: &GgufMetadata, key: &str) -> Option<u64> {
@@ -585,8 +929,8 @@ impl<'a> Reader<'a> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ArchitectureMetadata, GgufMetadataValue, GgufMetadataValueType, LlamaMetadata,
-        parse_gguf_metadata,
+        ArchitectureMetadata, GgmlType, GgufMetadataValue, GgufMetadataValueType, LlamaMetadata,
+        parse_gguf, parse_gguf_metadata,
     };
 
     #[test]
@@ -614,6 +958,7 @@ mod tests {
                 dimensions: vec![128],
                 ggml_type: 0,
                 offset: 0,
+                data: vec![],
             }],
             32,
         );
@@ -672,6 +1017,7 @@ mod tests {
                 dimensions: vec![64, 128],
                 ggml_type: 0,
                 offset: 0,
+                data: vec![],
             }],
             32,
         );
@@ -690,6 +1036,7 @@ mod tests {
                 dimensions: vec![128, 128],
                 ggml_type: 0,
                 offset: 0,
+                data: vec![],
             }],
             32,
         );
@@ -717,6 +1064,7 @@ mod tests {
                 dimensions: vec![128, 128],
                 ggml_type: 0,
                 offset: 0,
+                data: vec![],
             }],
             24,
         );
@@ -728,6 +1076,67 @@ mod tests {
                 .to_string()
                 .contains("GGUF alignment must be a power of two"),
             "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn supports_tensor_name_lookup_and_zero_copy_views() {
+        let first_tensor = vec![0, 0, 128, 63, 0, 0, 0, 64, 0, 0, 64, 64, 0, 0, 128, 64];
+        let second_tensor = (0_u8..34).collect::<Vec<_>>();
+        let bytes = build_gguf(
+            &[kv_string("general.architecture", "llama")],
+            &[
+                TensorEntry {
+                    name: "token_embd.weight",
+                    dimensions: vec![4],
+                    ggml_type: GgmlType::F32.raw(),
+                    offset: 0,
+                    data: first_tensor.clone(),
+                },
+                TensorEntry {
+                    name: "blk.0.attn_q.weight",
+                    dimensions: vec![32],
+                    ggml_type: GgmlType::Q8_0.raw(),
+                    offset: 32,
+                    data: second_tensor.clone(),
+                },
+            ],
+            32,
+        );
+
+        let gguf = parse_gguf(&bytes).expect("GGUF file should parse");
+        let metadata = gguf.metadata();
+        assert!(metadata.tensor_info("missing.weight").is_none());
+
+        let info = metadata
+            .tensor_info("blk.0.attn_q.weight")
+            .expect("tensor info should exist");
+        assert_eq!(info.parsed_ggml_type().expect("ggml type"), GgmlType::Q8_0);
+        assert_eq!(info.byte_len().expect("byte len"), 34);
+        assert_eq!(info.element_count().expect("element count"), 32);
+
+        let first_view = gguf
+            .tensor("token_embd.weight")
+            .expect("tensor lookup should succeed")
+            .expect("tensor view should exist");
+        assert_eq!(first_view.ggml_type().expect("ggml type"), GgmlType::F32);
+        assert_eq!(first_view.byte_len(), 16);
+        assert_eq!(first_view.data(), first_tensor.as_slice());
+        assert_eq!(
+            first_view.file_range(),
+            metadata.tensor_data_offset()..metadata.tensor_data_offset() + 16
+        );
+
+        let second_view = gguf
+            .tensor("blk.0.attn_q.weight")
+            .expect("tensor lookup should succeed")
+            .expect("tensor view should exist");
+        assert_eq!(second_view.ggml_type().expect("ggml type"), GgmlType::Q8_0);
+        assert_eq!(second_view.byte_len(), 34);
+        assert_eq!(second_view.data(), second_tensor.as_slice());
+        assert_eq!(
+            second_view.file_range(),
+            metadata.tensor_data_offset() + 32..metadata.tensor_data_offset() + 66
         );
     }
 
@@ -770,7 +1179,17 @@ mod tests {
             bytes.push(0);
         }
 
-        bytes.extend_from_slice(&vec![0_u8; alignment.max(1)]);
+        let mut tensor_data = vec![0_u8; alignment.max(1)];
+        for tensor in tensor_entries {
+            let offset = tensor.offset as usize;
+            let end = offset + tensor.data.len();
+            if tensor_data.len() < end {
+                tensor_data.resize(end, 0);
+            }
+            tensor_data[offset..end].copy_from_slice(&tensor.data);
+        }
+
+        bytes.extend_from_slice(&tensor_data);
         bytes
     }
 
@@ -829,6 +1248,7 @@ mod tests {
         dimensions: Vec<u64>,
         ggml_type: u32,
         offset: u64,
+        data: Vec<u8>,
     }
 
     struct MetadataEntry<'a> {

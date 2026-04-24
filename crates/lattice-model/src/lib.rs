@@ -6,8 +6,9 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 
 pub use gguf::{
-    ArchitectureMetadata, GgufHeader, GgufMetadata, GgufMetadataValue, GgufMetadataValueType,
-    GgufTensorInfo, LlamaMetadata, parse_gguf_metadata,
+    ArchitectureMetadata, GgmlType, GgmlTypeLayout, GgufFile, GgufHeader, GgufMetadata,
+    GgufMetadataValue, GgufMetadataValueType, GgufTensorInfo, GgufTensorView, LlamaMetadata,
+    parse_gguf, parse_gguf_metadata,
 };
 use lattice_core::{LatticeError, Result};
 use memmap2::{Mmap, MmapOptions};
@@ -101,6 +102,18 @@ impl MappedWeights {
         }
 
         parse_gguf_metadata(self.as_bytes())
+    }
+
+    /// Parses the mapped GGUF file and enables zero-copy tensor lookup.
+    pub fn gguf_file(&self) -> Result<GgufFile<'_>> {
+        if self.source.format() != WeightFormat::Gguf {
+            return Err(LatticeError::Message(format!(
+                "cannot parse GGUF file from {:?} weights",
+                self.source.format()
+            )));
+        }
+
+        parse_gguf(self.as_bytes())
     }
 
     /// Returns the mapped bytes.
