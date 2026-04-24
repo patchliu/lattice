@@ -165,16 +165,18 @@ pub struct LlamaTensorMap<'a> {
     pub output_norm: GgufTensorView<'a>,
     /// Final output projection weights.
     pub output: GgufTensorView<'a>,
+    /// Whether the output projection reuses the token embedding weights.
+    pub output_is_tied: bool,
     /// Per-layer transformer block weights.
     pub blocks: Vec<LlamaBlockTensors<'a>>,
 }
 
 impl<'a> LlamaTensorMap<'a> {
     /// Binds all required LLaMA tensor views from a parsed GGUF file.
-    pub fn from_gguf(file: &'a GgufFile<'a>, spec: &LlamaModelSpec) -> Result<Self> {
+    pub fn from_gguf(file: &GgufFile<'a>, spec: &LlamaModelSpec) -> Result<Self> {
         let token_embeddings = require_tensor(file, "token_embd.weight")?;
         let output_norm = require_tensor(file, "output_norm.weight")?;
-        let output = require_tensor(file, "output.weight")?;
+        let (output, output_is_tied) = resolve_output_tensor(file, &token_embeddings)?;
 
         require_vector_len(&output_norm, spec.embedding_length, "output_norm.weight")?;
         require_matrix_inner_dim(
@@ -224,6 +226,7 @@ impl<'a> LlamaTensorMap<'a> {
             token_embeddings,
             output_norm,
             output,
+            output_is_tied,
             blocks,
         })
     }
@@ -245,20 +248,31 @@ pub struct LlamaModel<'a> {
 
 impl<'a> LlamaModel<'a> {
     /// Builds a runtime-ready LLaMA model binding from a parsed GGUF file.
-    pub fn from_gguf(file: &'a GgufFile<'a>) -> Result<Self> {
+    pub fn from_gguf(file: &GgufFile<'a>) -> Result<Self> {
         let spec = LlamaModelSpec::try_from(file.metadata())?;
         let tensors = LlamaTensorMap::from_gguf(file, &spec)?;
         Ok(Self { spec, tensors })
     }
 }
 
-fn require_tensor<'a>(file: &'a GgufFile<'a>, name: &str) -> Result<GgufTensorView<'a>> {
+fn require_tensor<'a>(file: &GgufFile<'a>, name: &str) -> Result<GgufTensorView<'a>> {
     file.tensor(name)?
         .ok_or_else(|| LatticeError::Message(format!("missing required llama tensor `{name}`")))
 }
 
+fn resolve_output_tensor<'a>(
+    file: &GgufFile<'a>,
+    token_embeddings: &GgufTensorView<'a>,
+) -> Result<(GgufTensorView<'a>, bool)> {
+    if let Some(output) = optional_tensor(file, &["output.weight", "output"])? {
+        return Ok((output, false));
+    }
+
+    Ok((token_embeddings.clone(), true))
+}
+
 fn require_block_tensor<'a>(
-    file: &'a GgufFile<'a>,
+    file: &GgufFile<'a>,
     block_index: usize,
     suffix: &str,
 ) -> Result<GgufTensorView<'a>> {
@@ -306,6 +320,19 @@ fn required_usize(metadata: &GgufMetadata, key: &str) -> Result<usize> {
     })
 }
 
+fn optional_tensor<'a>(
+    file: &GgufFile<'a>,
+    names: &[&str],
+) -> Result<Option<GgufTensorView<'a>>> {
+    for name in names {
+        if let Some(tensor) = file.tensor(name)? {
+            return Ok(Some(tensor));
+        }
+    }
+
+    Ok(None)
+}
+
 fn optional_usize(metadata: &GgufMetadata, key: &str) -> Option<usize> {
     metadata
         .metadata_value(key)
@@ -335,7 +362,7 @@ mod tests {
 
     #[test]
     fn builds_validated_llama_spec_with_defaults() {
-        let bytes = build_llama_gguf(1, true);
+        let bytes = build_llama_gguf(1, None, true, false);
         let gguf = parse_gguf(&bytes).expect("GGUF should parse");
 
         let spec = LlamaModelSpec::try_from(gguf.metadata()).expect("llama spec should parse");
@@ -355,13 +382,15 @@ mod tests {
 
     #[test]
     fn binds_required_llama_tensors() {
-        let bytes = build_llama_gguf(2, false);
+        let bytes = build_llama_gguf(2, Some("output.weight"), true, true);
         let gguf = parse_gguf(&bytes).expect("GGUF should parse");
 
         let model = LlamaModel::from_gguf(&gguf).expect("llama model should bind");
         assert_eq!(model.spec.block_count, 2);
         assert_eq!(model.tensors.blocks.len(), 2);
+        assert!(!model.tensors.output_is_tied);
         assert_eq!(model.tensors.token_embeddings.name(), "token_embd.weight");
+        assert_eq!(model.tensors.output.name(), "output.weight");
         assert_eq!(
             model
                 .tensors
@@ -374,20 +403,45 @@ mod tests {
     }
 
     #[test]
+    fn binds_legacy_output_tensor_name() {
+        let bytes = build_llama_gguf(1, Some("output"), true, true);
+        let gguf = parse_gguf(&bytes).expect("GGUF should parse");
+
+        let model = LlamaModel::from_gguf(&gguf).expect("legacy output tensor should bind");
+        assert_eq!(model.tensors.output.name(), "output");
+        assert!(!model.tensors.output_is_tied);
+    }
+
+    #[test]
+    fn ties_output_to_token_embeddings_when_output_tensor_is_missing() {
+        let bytes = build_llama_gguf(1, None, true, true);
+        let gguf = parse_gguf(&bytes).expect("GGUF should parse");
+
+        let model = LlamaModel::from_gguf(&gguf).expect("missing output tensor should tie");
+        assert_eq!(model.tensors.output.name(), "token_embd.weight");
+        assert!(model.tensors.output_is_tied);
+    }
+
+    #[test]
     fn rejects_missing_required_tensor() {
-        let bytes = build_llama_gguf(1, true);
+        let bytes = build_llama_gguf(1, Some("output.weight"), false, true);
         let gguf = parse_gguf(&bytes).expect("GGUF should parse");
 
         let error = LlamaModel::from_gguf(&gguf).expect_err("missing tensor should fail");
         assert!(
             error
                 .to_string()
-                .contains("missing required llama tensor `output.weight`"),
+                .contains("missing required llama tensor `output_norm.weight`"),
             "unexpected error: {error}"
         );
     }
 
-    fn build_llama_gguf(block_count: usize, omit_output: bool) -> Vec<u8> {
+    fn build_llama_gguf(
+        block_count: usize,
+        output_name: Option<&str>,
+        include_output_norm: bool,
+        with_optional_metadata: bool,
+    ) -> Vec<u8> {
         let embedding = 8_usize;
         let feed_forward = 16_usize;
         let vocab = 32_usize;
@@ -409,7 +463,7 @@ mod tests {
             ),
         ];
 
-        if !omit_output {
+        if with_optional_metadata {
             metadata.push(MetadataEntry::u32("llama.attention.head_count_kv", 1));
             metadata.push(MetadataEntry::u32("llama.rope.dimension_count", 4));
             metadata.push(MetadataEntry::f32("llama.rope.freq_base", 5_000.0));
@@ -419,15 +473,15 @@ mod tests {
             ));
         }
 
-        let mut tensors = vec![
-            tensor("token_embd.weight", vec![embedding as u64, vocab as u64]),
-            tensor("output_norm.weight", vec![embedding as u64]),
-        ];
-        if !omit_output {
-            tensors.push(tensor(
-                "output.weight",
-                vec![embedding as u64, vocab as u64],
-            ));
+        let mut tensors = vec![tensor(
+            "token_embd.weight",
+            vec![embedding as u64, vocab as u64],
+        )];
+        if include_output_norm {
+            tensors.push(tensor("output_norm.weight", vec![embedding as u64]));
+        }
+        if let Some(output_name) = output_name {
+            tensors.push(tensor(output_name, vec![embedding as u64, vocab as u64]));
         }
 
         for block in 0..block_count {

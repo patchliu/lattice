@@ -576,7 +576,7 @@ impl<'a> GgufFile<'a> {
     }
 
     /// Returns a zero-copy view over a named tensor if present.
-    pub fn tensor(&'a self, name: &str) -> Result<Option<GgufTensorView<'a>>> {
+    pub fn tensor(&self, name: &str) -> Result<Option<GgufTensorView<'a>>> {
         let Some(info) = self.metadata.tensor_info(name) else {
             return Ok(None);
         };
@@ -584,7 +584,7 @@ impl<'a> GgufFile<'a> {
         Ok(Some(self.tensor_view(info)?))
     }
 
-    fn tensor_view(&'a self, info: &'a GgufTensorInfo) -> Result<GgufTensorView<'a>> {
+    fn tensor_view(&self, info: &GgufTensorInfo) -> Result<GgufTensorView<'a>> {
         let alignment = self.metadata.alignment()?;
         let offset = usize::try_from(info.offset).map_err(|_| {
             LatticeError::Message(format!(
@@ -620,7 +620,7 @@ impl<'a> GgufFile<'a> {
         })?;
 
         Ok(GgufTensorView {
-            info,
+            info: info.clone(),
             data,
             file_range: start..end,
         })
@@ -630,7 +630,7 @@ impl<'a> GgufFile<'a> {
 /// A zero-copy view over an encoded GGUF tensor payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GgufTensorView<'a> {
-    info: &'a GgufTensorInfo,
+    info: GgufTensorInfo,
     data: &'a [u8],
     file_range: Range<usize>,
 }
@@ -638,7 +638,7 @@ pub struct GgufTensorView<'a> {
 impl<'a> GgufTensorView<'a> {
     /// Returns the tensor descriptor.
     pub fn info(&self) -> &GgufTensorInfo {
-        self.info
+        &self.info
     }
 
     /// Returns the tensor name.
