@@ -11,6 +11,7 @@ description = "Runtime orchestration for single-node Lattice inference."
 workspace = true
 
 [dependencies]
+half.workspace = true
 lattice-core = { path = "../lattice-core" }
 lattice-kernels = { path = "../lattice-kernels" }
 lattice-model = { path = "../lattice-model" }

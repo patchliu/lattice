@@ -1,11 +1,16 @@
 //! Runtime orchestration for the Lattice bootstrap phase.
 
+mod llama;
+mod ops;
+
 use std::path::PathBuf;
 
 use lattice_core::{LatticeError, Result};
 use lattice_kernels::{DynamicLibraryKernelLauncher, KernelLauncher};
 use lattice_model::{GgufFile, LlamaModel, MappedWeights, WeightFormat};
 use tracing::{debug, info};
+
+pub use llama::PrefillOutput;
 
 /// Runtime configuration for a single-node CPU execution context.
 #[derive(Debug, Clone)]

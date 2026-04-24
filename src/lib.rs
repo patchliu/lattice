@@ -2,7 +2,7 @@
 
 pub mod models;
 
-pub use lattice_runtime::{InferenceRuntime, LoadedLlama};
+pub use lattice_runtime::{InferenceRuntime, LoadedLlama, PrefillOutput};
 pub use models::{
     ModelCatalog, ModelSpec, ResolvedModel, load_model_catalog, resolve_model,
     resolve_model_from_catalog,

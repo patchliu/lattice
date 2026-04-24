@@ -31,6 +31,7 @@ anyhow = "1.0.100"
 bytemuck = { version = "1.24.0", features = ["derive"] }
 clap = { version = "4.5.39", features = ["derive"] }
 hf-hub = "0.5.0"
+half = "2.7.1"
 libloading = "0.8.9"
 memmap2 = "0.9.5"
 serde = { version = "1.0.228", features = ["derive"] }
