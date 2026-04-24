@@ -1,6 +1,9 @@
 # Examples
 
-当前目录提供最小可运行示例，其中 `load_model.rs` 用于打通“自动下载模型 -> 映射权重 -> 解析 GGUF -> 构造 LLaMA 运行绑定”的链路。
+当前目录提供最小可运行示例：
+
+- `load_model.rs` 用于打通“自动下载模型 -> 映射权重 -> 解析 GGUF -> 构造 LLaMA 运行绑定”的链路
+- `first_token.rs` 用于执行 first-token prefill 路径：输入原始 `token ids`，输出最后一个位置的 logits 和 argmax token
 
 这个示例当前验证的是 smoke path，而不是真实推理。仓库目前已经能完成模型下载、缓存复用、格式识别、`mmap` 映射、GGUF 元数据解析，以及 LLaMA 架构的关键 tensor 绑定，但还没有实现 tokenizer、算子执行、logits 计算和采样解码，所以输出不代表模型真的生成了 token。
 
@@ -66,6 +69,21 @@ file = "Llama-3.2-1B-Instruct-Q8_0.gguf"
 - attention / matmul / RMSNorm / RoPE 等真实前向算子
 - KV cache 和 decode loop
 - logits 到 token 的采样输出
+
+现在仓库已经新增了一个更进一步的 prefill 路径：
+
+```bash
+cargo run --example first_token -- smollm-small 1,2,3
+```
+
+这个 example 会：
+
+- 从 catalog 解析并加载 GGUF 模型
+- 直接接收命令行里的 `token ids`
+- 执行完整 prefill
+- 打印最后一个位置的 argmax token id 和 logits 长度
+
+这条路径仍然不包含 tokenizer、KV cache 或采样器，但它已经是“真实前向 + 真实 logits”，不再只是 tensor 绑定 smoke test。
 
 这个设计的优点是：
 
