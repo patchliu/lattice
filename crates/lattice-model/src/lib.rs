@@ -1,8 +1,14 @@
 //! Model source handling and zero-copy weight mapping.
 
+pub mod gguf;
+
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
+pub use gguf::{
+    ArchitectureMetadata, GgufHeader, GgufMetadata, GgufMetadataValue, GgufMetadataValueType,
+    GgufTensorInfo, LlamaMetadata, parse_gguf_metadata,
+};
 use lattice_core::{LatticeError, Result};
 use memmap2::{Mmap, MmapOptions};
 
@@ -83,6 +89,18 @@ impl MappedWeights {
     /// Returns the model source metadata.
     pub fn source(&self) -> &ModelSource {
         &self.source
+    }
+
+    /// Parses GGUF metadata from the mapped model file.
+    pub fn gguf_metadata(&self) -> Result<GgufMetadata> {
+        if self.source.format() != WeightFormat::Gguf {
+            return Err(LatticeError::Message(format!(
+                "cannot parse GGUF metadata from {:?} weights",
+                self.source.format()
+            )));
+        }
+
+        parse_gguf_metadata(self.as_bytes())
     }
 
     /// Returns the mapped bytes.
